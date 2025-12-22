@@ -148,7 +148,7 @@ clang -O2 linked.bc -lc++ -o protected
 
 ## The Philosophy
 
-Modern reverse engineering has become a conversation with an AI. Upload binary, ask questions, receive answers. The human is merely a prompt engineer, a middleman between IDA and GPT.
+Modern reverse engineering has become a conversation with an AI. Upload binary, ask questions, receive answers. The human is merely a prompt engineer, a middleman between IDA and GPT. A sloperator.
 
 **llvm-jutsu** is a return to tradition. The reverser must *look* at the hands. *Read* the fingers. *Feel* the bits. There is no shortcut. There is no "just ask Claude." There is only you, the screen, and eight fingers per byte.
 
