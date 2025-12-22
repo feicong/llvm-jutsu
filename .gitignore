@@ -1,0 +1,33 @@
+# Build artifacts
+*.so
+*.so.dSYM/
+*.bc
+*.ll
+*.o
+
+# Binaries
+example.obfuscated
+gen_samples
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.mypy_cache/
+.python-version
+pyproject.toml
+uv.lock
+
+# IDE/Editor
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+# Claude Code
+.claude/
+.mcp.json
+
+# Misc
+*.i64
