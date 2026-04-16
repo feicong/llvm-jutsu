@@ -123,20 +123,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          CXXFLAGS="$(llvm-config --cxxflags) -I$(llvm-config --includedir) -fPIC -O3 -g"
-          LDFLAGS="$(llvm-config --ldflags --system-libs --libs all) -g"
-          clang++ $CXXFLAGS -shared -o llvm-jutsu.dylib llvm-jutsu.cpp lodepng.cpp $LDFLAGS
+          LLVM_PREFIX="$(brew --prefix llvm)"
+          LLVM_CONFIG="$LLVM_PREFIX/bin/llvm-config"
+          CXXFLAGS="$($LLVM_CONFIG --cxxflags) -I$LLVM_PREFIX/include -fPIC -O3 -g"
+          LDFLAGS="$($LLVM_CONFIG --ldflags --system-libs --libs all) -g"
+          "$LLVM_PREFIX/bin/clang++" $CXXFLAGS -shared -o llvm-jutsu.dylib llvm-jutsu.cpp lodepng.cpp $LDFLAGS
 
       - name: Build pass (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $llvmBin = "C:\Program Files\LLVM\bin"
-          $env:PATH = "$llvmBin;$env:PATH"
-          $cxxflags = (& "$llvmBin\llvm-config.exe" --cxxflags) -split '\s+' | Where-Object { $_ }
-          $ldflags  = (& "$llvmBin\llvm-config.exe" --ldflags --libs all) -split '\s+' | Where-Object { $_ }
-          & clang++ @cxxflags -O3 -g -shared -o llvm-jutsu.dll llvm-jutsu.cpp lodepng.cpp @ldflags
+          $llvmDir = "C:\Program Files\LLVM"
+          $env:PATH = "$llvmDir\bin;$env:PATH"
+          $llvmCmakeDir = "$llvmDir\lib\cmake\llvm"
+          cmake -B build -S . -DLLVM_DIR="$llvmCmakeDir"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build --config Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Test-Path "build\Release\llvm-jutsu.dll") {
+            Copy-Item "build\Release\llvm-jutsu.dll" -Destination "llvm-jutsu.dll"
+          } else {
+            Copy-Item "build\llvm-jutsu.dll" -Destination "llvm-jutsu.dll"
+          }
 
       - name: Package artifact (Linux/macOS)
         if: runner.os != 'Windows'
