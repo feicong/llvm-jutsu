@@ -123,11 +123,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Use cmake with the Homebrew LLVM cmake config (recommended by Homebrew).
-          # Direct clang++ compilation cannot reliably discover the LLVM include path
-          # from llvm-config --cxxflags on macOS keg-only installs.
-          LLVM_DIR="$(brew --prefix llvm)/lib/cmake/llvm"
-          cmake -B build -S . -DLLVM_DIR="$LLVM_DIR" -DCMAKE_BUILD_TYPE=Release
+          # Use CMAKE_PREFIX_PATH (recommended by Homebrew) so cmake sets
+          # LLVM_INSTALL_PREFIX correctly and LLVM_INCLUDE_DIRS is derived from it.
+          # Using -DLLVM_DIR alone may leave LLVM_INCLUDE_DIRS empty in LLVM 17+
+          # keg-only Homebrew installs.
+          LLVM_PREFIX="$(brew --prefix llvm)"
+          cmake -B build -S . \
+            -DCMAKE_PREFIX_PATH="$LLVM_PREFIX" \
+            -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release
           find build -name "llvm-jutsu.dylib" | head -1 | xargs -I{} cp {} llvm-jutsu.dylib
 
@@ -137,12 +140,41 @@ jobs:
         run: |
           $llvmDir = "C:\Program Files\LLVM"
           $env:PATH = "$llvmDir\bin;$env:PATH"
-          # The choco LLVM package ships LLVMConfig.cmake; use cmake with ClangCL
-          # toolset (clang with MSVC ABI) to match the ABI of the pre-built LLVM.
-          cmake -B build -S . `
-            "-DLLVM_DIR=$llvmDir\lib\cmake\llvm" `
-            -DCMAKE_BUILD_TYPE=Release `
-            -T ClangCL -A x64
+
+          # Dynamically locate LLVMConfig.cmake because the chocolatey package
+          # may place it in a subdirectory other than lib\cmake\llvm on some
+          # runner image versions.
+          $llvmCmakeDir = $null
+          $candidates = @(
+            "$llvmDir\lib\cmake\llvm",
+            "$llvmDir\cmake\llvm",
+            "$llvmDir\cmake"
+          )
+          foreach ($d in $candidates) {
+            if (Test-Path (Join-Path $d "LLVMConfig.cmake")) {
+              $llvmCmakeDir = $d
+              break
+            }
+          }
+          if (-not $llvmCmakeDir) {
+            $found = Get-ChildItem -Path $llvmDir -Recurse -Depth 5 -Filter "LLVMConfig.cmake" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { $llvmCmakeDir = $found.DirectoryName }
+          }
+
+          if ($llvmCmakeDir) {
+            Write-Host "Using LLVMConfig.cmake from: $llvmCmakeDir"
+            cmake -B build -S . `
+              "-DLLVM_DIR=$llvmCmakeDir" `
+              -DCMAKE_BUILD_TYPE=Release `
+              -T ClangCL -A x64
+          } else {
+            Write-Host "LLVMConfig.cmake not found; falling back to CMAKE_PREFIX_PATH"
+            cmake -B build -S . `
+              "-DCMAKE_PREFIX_PATH=$llvmDir" `
+              -DCMAKE_BUILD_TYPE=Release `
+              -T ClangCL -A x64
+          }
+
           cmake --build build --config Release
           $dll = Get-ChildItem -Path build -Recurse -Filter "llvm-jutsu.dll" | Select-Object -First 1
           if (-not $dll) { Write-Error "llvm-jutsu.dll not found in build output"; exit 1 }
