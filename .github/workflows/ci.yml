@@ -123,28 +123,40 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          LLVM_PREFIX="$(brew --prefix llvm)"
-          LLVM_CONFIG="$LLVM_PREFIX/bin/llvm-config"
-          CXXFLAGS="$($LLVM_CONFIG --cxxflags) -I$LLVM_PREFIX/include -fPIC -O3 -g"
-          LDFLAGS="$($LLVM_CONFIG --ldflags --system-libs --libs all) -g"
-          "$LLVM_PREFIX/bin/clang++" $CXXFLAGS -shared -o llvm-jutsu.dylib llvm-jutsu.cpp lodepng.cpp $LDFLAGS
+          # Use cmake with the Homebrew LLVM cmake config (recommended by Homebrew).
+          # Direct clang++ compilation cannot reliably discover the LLVM include path
+          # from llvm-config --cxxflags on macOS keg-only installs.
+          LLVM_DIR="$(brew --prefix llvm)/lib/cmake/llvm"
+          cmake -B build -S . -DLLVM_DIR="$LLVM_DIR" -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release
+          find build -name "llvm-jutsu.dylib" | head -1 | xargs -I{} cp {} llvm-jutsu.dylib
 
       - name: Build pass (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          # The LLVM package pre-installed on Windows runners does not ship
+          # LLVMConfig.cmake, so cmake's find_package(LLVM) cannot be used.
+          # Instead, drive clang++ directly with flags from llvm-config.
           $llvmDir = "C:\Program Files\LLVM"
           $env:PATH = "$llvmDir\bin;$env:PATH"
-          $llvmCmakeDir = "$llvmDir\lib\cmake\llvm"
-          cmake -B build -S . -DLLVM_DIR="$llvmCmakeDir"
+          $llvmConfig = "$llvmDir\bin\llvm-config.exe"
+
+          $includeDir = (& $llvmConfig --includedir).Trim()
+          $cxxFlags = (& $llvmConfig --cxxflags) -split '\s+' | Where-Object { $_ }
+          $ldFlags = (& $llvmConfig --ldflags) -split '\s+' | Where-Object { $_ }
+          $llvmLibs = (& $llvmConfig --libs core support passes analysis transformutils) -split '\s+' | Where-Object { $_ }
+          $sysLibs = (& $llvmConfig --system-libs) -split '\s+' | Where-Object { $_ }
+
+          $compileArgs = @(
+            "-I$includeDir",
+            "-shared", "-o", "llvm-jutsu.dll",
+            "llvm-jutsu.cpp", "lodepng.cpp"
+          ) + $cxxFlags + $ldFlags + $llvmLibs + $sysLibs
+
+          Write-Host "Building with clang++ (direct compilation)..."
+          & "$llvmDir\bin\clang++.exe" @compileArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build build --config Release
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if (Test-Path "build\Release\llvm-jutsu.dll") {
-            Copy-Item "build\Release\llvm-jutsu.dll" -Destination "llvm-jutsu.dll"
-          } else {
-            Copy-Item "build\llvm-jutsu.dll" -Destination "llvm-jutsu.dll"
-          }
 
       - name: Package artifact (Linux/macOS)
         if: runner.os != 'Windows'
