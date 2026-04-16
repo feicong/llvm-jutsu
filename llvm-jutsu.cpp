@@ -2,7 +2,13 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Constants.h"
+#if __has_include("llvm/Plugins/PassPlugin.h")
+#include "llvm/Plugins/PassPlugin.h"
+#elif __has_include("llvm/Passes/PassPlugin.h")
 #include "llvm/Passes/PassPlugin.h"
+#else
+#error "LLVM pass plugin header not found"
+#endif
 #include "llvm/Passes/PassBuilder.h"
 #include "lodepng.h"
 #include <vector>
