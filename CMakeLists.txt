@@ -19,6 +19,14 @@ add_library(llvm-jutsu MODULE
 
 set_target_properties(llvm-jutsu PROPERTIES PREFIX "")
 
+if(APPLE)
+  # On macOS, allow undefined symbols to be resolved at load time from the host
+  # process (opt/clang which already links LLVM), and use .dylib extension so
+  # the plugin can be loaded with -load-pass-plugin.
+  target_link_options(llvm-jutsu PRIVATE -undefined dynamic_lookup)
+  set_target_properties(llvm-jutsu PROPERTIES SUFFIX ".dylib")
+endif()
+
 if(WIN32)
   # On Windows, DLLs cannot have unresolved symbols, so link against LLVM libs.
   if(TARGET LLVM)
