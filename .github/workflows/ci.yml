@@ -1,0 +1,216 @@
+# Copyright (c) 2025-2026 fei_cong(https://github.com/feicong/feicong-course)
+
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 目标Release标签（留空时使用 latest）
+        required: false
+        default: "latest"
+        type: string
+      upload:
+        description: 是否上传到Release
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux
+            runs_on: ubuntu-24.04
+          - label: macos
+            runs_on: macos-15
+          - label: windows
+            runs_on: windows-2025
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install LLVM (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y llvm clang
+
+      - name: Install LLVM (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install llvm
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
+      - name: Install LLVM (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install llvm --yes --no-progress
+          $llvmBin = "C:\Program Files\LLVM\bin"
+          if (Test-Path $llvmBin) {
+            $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
+
+      - name: Detect host info
+        id: host
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          release_tag='${{ inputs.release_tag }}'
+          if [ -z "$release_tag" ]; then
+            release_tag="latest"
+          fi
+
+          case "${RUNNER_OS}" in
+            Linux)
+              arch="$(uname -m)"
+              pass_file="llvm-jutsu.so"
+              archive_name="llvm-jutsu-${release_tag}-${arch}-linux.tar.gz"
+              ;;
+            macOS)
+              arch="$(uname -m)"
+              pass_file="llvm-jutsu.dylib"
+              archive_name="llvm-jutsu-${release_tag}-${arch}-macos.tar.gz"
+              ;;
+            Windows)
+              arch="$(echo "$PROCESSOR_ARCHITECTURE" | tr '[:upper:]' '[:lower:]')"
+              pass_file="llvm-jutsu.dll"
+              archive_name="llvm-jutsu-${release_tag}-${arch}-windows.zip"
+              ;;
+          esac
+
+          {
+            echo "pass_file=$pass_file"
+            echo "archive_name=$archive_name"
+            echo "release_tag=$release_tag"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build pass (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          CXXFLAGS="$(llvm-config --cxxflags) -fPIC -O3 -g"
+          LDFLAGS="$(llvm-config --ldflags --system-libs --libs all) -g"
+          clang++ $CXXFLAGS -shared -o llvm-jutsu.so llvm-jutsu.cpp lodepng.cpp $LDFLAGS
+
+      - name: Build pass (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          CXXFLAGS="$(llvm-config --cxxflags) -fPIC -O3 -g"
+          LDFLAGS="$(llvm-config --ldflags --system-libs --libs all) -g"
+          clang++ $CXXFLAGS -shared -o llvm-jutsu.dylib llvm-jutsu.cpp lodepng.cpp $LDFLAGS
+
+      - name: Build pass (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          CXXFLAGS="$(llvm-config --cxxflags) -O3 -g"
+          LDFLAGS="$(llvm-config --ldflags --libs all) -g"
+          clang++ $CXXFLAGS -shared -o llvm-jutsu.dll llvm-jutsu.cpp lodepng.cpp $LDFLAGS
+
+      - name: Package artifact (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pass_file="${{ steps.host.outputs.pass_file }}"
+          archive_name="${{ steps.host.outputs.archive_name }}"
+          tar -czf "$archive_name" "$pass_file"
+
+      - name: Package artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $passFile = "${{ steps.host.outputs.pass_file }}"
+          $archiveName = "${{ steps.host.outputs.archive_name }}"
+          Compress-Archive -Path $passFile -DestinationPath $archiveName -Force
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}-pass
+          path: ${{ steps.host.outputs.archive_name }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish release assets
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload == true || github.event_name == 'push' }}
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine release tag
+        id: vars
+        shell: bash
+        run: |
+          release_tag='${{ inputs.release_tag }}'
+          if [ -z "$release_tag" ]; then
+            release_tag="latest"
+          fi
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Update release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f "${{ steps.vars.outputs.release_tag }}" "${{ github.sha }}"
+          git push origin "refs/tags/${{ steps.vars.outputs.release_tag }}" --force
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.release_tag }}
+          target_commitish: ${{ github.sha }}
+          name: llvm-jutsu (${{ steps.vars.outputs.release_tag }})
+          body: |
+            **llvm-jutsu** LLVM obfuscation pass — pre-built binaries.
+
+            | Platform | File |
+            |----------|------|
+            | Linux (x86_64) | `llvm-jutsu-*-x86_64-linux.tar.gz` |
+            | macOS (arm64/x86_64) | `llvm-jutsu-*-*-macos.tar.gz` |
+            | Windows (amd64) | `llvm-jutsu-*-amd64-windows.zip` |
+
+            Commit: `${{ github.sha }}`
+          files: release-assets/*
+          make_latest: true
